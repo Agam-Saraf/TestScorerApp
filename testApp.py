@@ -10,9 +10,10 @@ def preprocess_sheet(df):
     # Remove rows above the "TOTAL" row
     processed_df = df.iloc[total_row_index:].reset_index(drop=True)
     
-    # Set the first row as the header
-    processed_df.columns = processed_df.iloc[0].astype(str)  # Ensure headers are strings
-    processed_df = processed_df[1:].reset_index(drop=True)
+    if (total_row_index != 0):
+        # Set the first row as the header
+        processed_df.columns = processed_df.iloc[0].astype(str)  # Ensure headers are strings
+        processed_df = processed_df[1:].reset_index(drop=True)
     
     return processed_df
 
