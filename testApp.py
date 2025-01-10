@@ -1,5 +1,10 @@
 import streamlit as st
 import pandas as pd
+import requests
+import tempfile
+from io import BytesIO
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image
 
 # Function to preprocess a single sheet
 def preprocess_sheet(df):
@@ -30,12 +35,29 @@ def create_max_marks_UI(uploaded_file):
 
     return max_marks
 
-# Function to process Excel file
-def process_excel(uploaded_file, max_marks, metadata):
+# Function to download image from GitHub URL and save it to a temporary file
+def download_image_from_github(image_url):
+    response = requests.get(image_url)
+    img_data = response.content
+
+    # Save image to a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_img_file:
+        tmp_img_file.write(img_data)
+        return tmp_img_file.name  # Return the temporary file path
+
+# Function to process Excel file and add image
+def process_excel(uploaded_file, max_marks, metadata, image_url):
     xls = pd.ExcelFile(uploaded_file)
     result_file_path = "Result.xlsx"
-    result_file = pd.ExcelWriter(result_file_path, engine="openpyxl")
+    wb = Workbook()
 
+    # Remove the default sheet that openpyxl creates when initializing a new workbook
+    wb.remove(wb.active)
+
+    # Download image from GitHub and save it to a temporary file
+    image_path = download_image_from_github(image_url)
+    
+    # Process each sheet and add data
     for name in max_marks.keys():
         st.write(f"Processing sheet: {name}")
         df = pd.read_excel(xls, sheet_name=name)
@@ -63,23 +85,71 @@ def process_excel(uploaded_file, max_marks, metadata):
         df_weak["SIGNATURE"] = ""
         df_bright["SIGNATURE"] = ""
 
-        # Create metadata DataFrame with the new "Course" field
+        # Create a new sheet for each "Bright Students" and "Weak Students"
+        ws_bright = wb.create_sheet(f"Bright Students - {name}")
+        ws_weak = wb.create_sheet(f"Weak Students - {name}")
+
+        # Insert the image at the top of each sheet
+        img_bright = Image(image_path)
+        ws_bright.add_image(img_bright, 'A1')
+        
+        img_weak = Image(image_path)
+        ws_weak.add_image(img_weak, 'A1')
+
+        # Add metadata below the image for "Bright Students" sheet
+        start_row_bright = img_bright.height // 15 + 5  # Adjust based on the image height
+        start_row_weak = img_weak.height // 15 + 5  # Adjust based on the image height
+        
+        # Create metadata info
         metadata_info = pd.DataFrame(
             {
-                "Metadata": ["Name of the Faculty:", "Program:", "Year:", "Semester:", "Course:"],
-                "Details": [metadata["faculty"], metadata["program"], metadata["year"], metadata["semester"], metadata["course"]],
+                "Metadata": ["Name of the Faculty:", "Program:", "Class:", "Year:", "Semester:", "Course:", "Course Code:"],
+                "Details": [metadata["faculty"], metadata["program"], metadata["class"], metadata["year"], metadata["semester"], metadata["course"], metadata["course_code"]],
             }
         )
 
-        # Save metadata and student data to Excel
-        metadata_info.to_excel(result_file, sheet_name=name + " (Weak)", index=False, header=False)
-        df_weak.to_excel(result_file, sheet_name=name + " (Weak)", startrow=5, index=False)
-        metadata_info.to_excel(result_file, sheet_name=name + " (Bright)", index=False, header=False)
-        df_bright.to_excel(result_file, sheet_name=name + " (Bright)", startrow=5, index=False)
+        # Write metadata to "Bright Students" sheet
+        for i, row in metadata_info.iterrows():
+            ws_bright[f"A{start_row_bright + i}"] = row['Metadata']
+            ws_bright[f"B{start_row_bright + i}"] = row['Details']
 
-        st.success(f"Sheet {name} processed successfully!")
+        # Write metadata to "Weak Students" sheet
+        for i, row in metadata_info.iterrows():
+            ws_weak[f"A{start_row_weak + i}"] = row['Metadata']
+            ws_weak[f"B{start_row_weak + i}"] = row['Details']
 
-    result_file.close()
+        # Insert a line between metadata and the data (Weak/Bright Students)
+        blank_row_bright = start_row_bright + len(metadata_info) + 1
+        blank_row_weak = start_row_weak + len(metadata_info) + 1
+
+        ws_bright[f"A{blank_row_bright}"] = ""  # Blank row
+
+        ws_weak[f"A{blank_row_weak}"] = ""  # Blank row
+
+        # Add "List of Weak Students" or "List of Bright Students" line
+        weak_bright_line = "List of Weak Students" if "Weak" in name else "List of Bright Students"
+        ws_bright[f"A{blank_row_bright + 1}"] = weak_bright_line
+        ws_weak[f"A{blank_row_weak + 1}"] = weak_bright_line
+
+        # Write the data to the "Bright Students" sheet
+        for i, col in enumerate(df_bright.columns, 1):
+            ws_bright.cell(row=blank_row_bright + 2, column=i, value=col)
+
+        for i, row in enumerate(df_bright.itertuples(), blank_row_bright + 3):
+            for j, value in enumerate(row[1:], 1):  # Skip the index
+                ws_bright.cell(row=i, column=j, value=value)
+
+        # Write the data to the "Weak Students" sheet
+        for i, col in enumerate(df_weak.columns, 1):
+            ws_weak.cell(row=blank_row_weak + 2, column=i, value=col)
+
+        for i, row in enumerate(df_weak.itertuples(), blank_row_weak + 3):
+            for j, value in enumerate(row[1:], 1):  # Skip the index
+                ws_weak.cell(row=i, column=j, value=value)
+
+    # Save the workbook
+    wb.save(result_file_path)
+
     return result_file_path
 
 # Streamlit App
@@ -90,19 +160,25 @@ uploaded_file = st.file_uploader("Upload an Excel file", type=["xlsx"])
 if uploaded_file:
     st.write("Excel file uploaded successfully!")
 
-    # Include the new "Course" metadata field
+    # Include the new "Program" dropdown
     metadata = {
         "faculty": st.text_input("Name of Faculty"),
-        "program": st.text_input("Program"),
-        
-        # Dropdown for Year
-        "year": st.selectbox(
-            "Select Year",
-            ["F.Y. B.TECH", "S.Y. B.TECH", "T.Y. B.TECH", "Final Year B.TECH"],
-            key="year_selector"  # Key to keep track of this widget
-        ),
-        
-        # Conditional Dropdown for Semester based on Year
+        "program": st.selectbox(
+            "Program", 
+            [
+                "Electronics and Telecommunication Engg", 
+                "Information Technology", 
+                "Computer Engineering", 
+                "Mechanical Engineering", 
+                "Computer Science and Engineering (Data Science)",
+                "Artificial Intelligence and Machine Learning", 
+                "Artificial Intelligence (AI) and Data Science", 
+                "Computer Science and Engineering (IOT and Cyber Security with Block Chain Technology)"
+            ], 
+            key="program_selector"
+        ),  # Program dropdown
+        "class": st.selectbox("Select Class", ["F.Y. B.TECH", "S.Y. B.TECH", "T.Y. B.TECH", "Final Year B.TECH"], key="class_selector"),
+        "year": st.text_input("Year"),  # Year field (independent)
         "semester": st.selectbox(
             "Select Semester",
             {
@@ -110,17 +186,21 @@ if uploaded_file:
                 "S.Y. B.TECH": ["III", "IV"],
                 "T.Y. B.TECH": ["V", "VI"],
                 "Final Year B.TECH": ["VII", "VIII"]
-            }[st.session_state.get("year_selector", "F.Y. B.TECH")]  # Dynamically fetch the semester options based on selected year
+            }[st.session_state.get("class_selector", "F.Y. B.TECH")]  # Dynamically fetch the semester options based on selected class
         ),
-        
-        "course": st.text_input("Course"),  # Added Course field
+        "course": st.text_input("Course"),  # Course field
+        "course_code": st.text_input("Course Code"),  # Course Code field
     }
+
+
+    # Set the GitHub URL for the image (public raw image URL)
+    image_url = "https://raw.githubusercontent.com/Agam-Saraf/TestScorerApp/551c9d2ad4930bafb67d8a5af567a1c7e46c9ff7/img.png"  # Replace with your actual image URL
 
     max_marks = create_max_marks_UI(uploaded_file)
 
     if max_marks and st.button("Start Processing"):
         if all(val is not None and val > 0 for val in max_marks.values()):
-            result_path = process_excel(uploaded_file, max_marks, metadata)
+            result_path = process_excel(uploaded_file, max_marks, metadata, image_url)
 
             # Excel Download
             with open(result_path, "rb") as f:
