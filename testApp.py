@@ -98,13 +98,19 @@ if uploaded_file:
         # Dropdown for Year
         "year": st.selectbox(
             "Select Year",
-            ["F.Y. B.TECH", "S.Y. B.TECH", "T.Y. B.TECH", "Final Year B.TECH"]
+            ["F.Y. B.TECH", "S.Y. B.TECH", "T.Y. B.TECH", "Final Year B.TECH"],
+            key="year_selector"  # Key to keep track of this widget
         ),
         
-        # Dropdown for Semester
+        # Conditional Dropdown for Semester based on Year
         "semester": st.selectbox(
             "Select Semester",
-            ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]
+            {
+                "F.Y. B.TECH": ["I", "II"],
+                "S.Y. B.TECH": ["III", "IV"],
+                "T.Y. B.TECH": ["V", "VI"],
+                "Final Year B.TECH": ["VII", "VIII"]
+            }[st.session_state.get("year_selector", "F.Y. B.TECH")]  # Dynamically fetch the semester options based on selected year
         ),
         
         "course": st.text_input("Course"),  # Added Course field
